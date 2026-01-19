@@ -21,3 +21,5 @@
 9. 阅读Columba Design Document.md，根据其中API模组的设计，实现对应scripts，在Test目录下写一个test_agent.py脚本，这个脚本测试Agent的工具调用功能，用户输入为获取当前gpu状况，agent应当调用nvidia-smi来获取信息并且返回。
  完成
 10. good，现在我们在Src目录下写一个main.py，新建入口文件，加载config，启动Scheduler，同时修改其他对应文件
+    完成
+11. 写一个requirements.txt，把我们需要install的库全部写进去

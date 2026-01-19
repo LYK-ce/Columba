@@ -3,13 +3,24 @@
 ## 项目结构
 
 
-### llama.cpp
 
 ### Model
+模型文件存储目录，存放GGUF格式的大语言模型文件。Agent模组从此目录加载模型。该目录不纳入git版本控制。
 
 ### Src
+源代码目录，包含以下子模组：
+- Agent/ - Agent执行器模组
+- API/ - 方法调用模组
+- Comm/ - 通信模组
+- Config/ - 配置文件
+- Log/ - 日志模组
+- Scheduler_Daemon/ - 后台调度模组
+- main.py - 程序入口
 
 ### Tool
+工具脚本目录，提供辅助功能：
+- download_model.py - 从ModelScope下载GGUF模型到Model目录
+- doc.md - 工具说明文档
 
 ## Columba Design
 

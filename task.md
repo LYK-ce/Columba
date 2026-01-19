@@ -14,3 +14,10 @@
 6. 在Test 目录下写一个test_comm.py脚本，这个脚本初始化一个Comm实例，然后向user email发送一封邮件，内容是hello world，然后尝试接收邮件，并且把内容打印出来
    完成
 7. 阅读Columba Design Document.md，根据其中Scheduler模组的设计，实现对应scripts.当然，现在我们还没有实现agent脚本，所以这里的agent脚本就写一个简单的等待5s后通过message queue返回消息即可。然后在Test目录下写一个test_scheduler.py脚本，测试scheduler的功能。
+   完成
+8. 阅读Columba Design Document.md，根据其中Agent模组的设计，实现对应scripts，暂时不需要实现test脚本
+   完成
+
+9. 阅读Columba Design Document.md，根据其中API模组的设计，实现对应scripts，在Test目录下写一个test_agent.py脚本，这个脚本测试Agent的工具调用功能，用户输入为获取当前gpu状况，agent应当调用nvidia-smi来获取信息并且返回。
+ 完成
+10. good，现在我们在Src目录下写一个main.py，新建入口文件，加载config，启动Scheduler，同时修改其他对应文件

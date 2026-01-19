@@ -72,6 +72,23 @@ Agent类
 5. _execute_tool(self, tool_name, args) -> str:
    """执行指定tool"""
 
+
+
+### API 方法调用模组
+API模组为当前的Agent提供了我们所需要的功能。
+
+#### 文件
+Src/API
+   - Shell.py 命令行抽象，所有工具调用将会通过这里变成各种命令执行。后续还需要添加命令检测确保安全等等。
+   - Exec.py  命令执行工具
+#### Shell 
+   命令行抽象，封装subprocess类，所有工具调用通过这里变成各种具体的命令，后续添加安全检测
+#### Exec 命令执行工具
+   工具API封装，包含执行agent转换成的对应命令。
+   Execute_Command(command) 供Agent调用
+   API_DESCRIPTION 工具描述
+   调用Shell.Execute()获取结果
+
 ### Scheduler_Daemon 后台模组
 Scheduler_Daemon模组，是整个Columba项目的后台进程。它运行在后台，负责检查邮箱内容，以及唤醒agent呼叫它处理任务等。scheduler daemon根据用户配置，每隔一定时间检查一次邮箱，如果没有邮件那么就什么都不做，如果有邮件，就唤醒agent，等待agent加载完毕后将用户的指令发送给agent开始处理，同时将轮询次数调整为5 s。根据用户配置，如果一定时间内没有再次收到用户的邮件，那么就恢复到原来的检查次数，然后关闭当前的agent。
 

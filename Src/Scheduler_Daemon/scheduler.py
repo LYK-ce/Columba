@@ -32,8 +32,9 @@ class Scheduler:
         
         Args:
             config: 配置字典
-            agent_target: Agent进程的目标函数，签名为 agent_target(to_agent_queue, from_agent_queue)
+            agent_target: Agent进程的目标函数，签名为 agent_target(config, to_agent_queue, from_agent_queue)
         """
+        self._config = config  # 保存完整config供Agent使用
         scheduler_config = config.get("Scheduler", {})
         
         # 配置属性
@@ -88,7 +89,7 @@ class Scheduler:
         
         self.agent = Process(
             target=self._agent_target,
-            args=(self.to_agent_queue, self.from_agent_queue)
+            args=(self._config, self.to_agent_queue, self.from_agent_queue)
         )
         self.agent.start()
         Log_Info("Scheduler", f"Agent进程已启动, PID={self.agent.pid}")
@@ -209,8 +210,15 @@ class Scheduler:
             if response:
                 self.state = self.STATE_ACTIVE
                 self.last_agent_response_time = time.time()
+                
+                # 将Agent响应通过邮件发送给用户
+                if response.get("type") == "response":
+                    reply_content = response.get("content", "")
+                    self._comm.Send(reply_content)
+                    Log_Info("Scheduler", "已将响应通过邮件发送给用户")
             else:
                 Log_Info("Scheduler", "Agent响应超时，返回Idle状态")
+                self._comm.Send("抱歉，处理您的请求时超时，请稍后重试。")
                 if not self.agent_persistence:
                     self._stop_agent()
     
@@ -234,12 +242,23 @@ class Scheduler:
             response = self._check_agent_response()
             if response:
                 self.last_agent_response_time = time.time()
+                
+                # 将Agent响应通过邮件发送给用户
+                if response.get("type") == "response":
+                    reply_content = response.get("content", "")
+                    self._comm.Send(reply_content)
+                    Log_Info("Scheduler", "已将响应通过邮件发送给用户")
         
         # 检查是否有Agent主动发来的消息
         while True:
             response = self._try_get_agent_response()
             if response:
                 self.last_agent_response_time = time.time()
+                # 将Agent响应通过邮件发送给用户
+                if response.get("type") == "response":
+                    reply_content = response.get("content", "")
+                    self._comm.Send(reply_content)
+                    Log_Info("Scheduler", "已将Agent主动响应通过邮件发送给用户")
             else:
                 break
         

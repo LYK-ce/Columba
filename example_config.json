@@ -1,0 +1,43 @@
+{
+    "Target_Workspace": {
+        "target_workspace": "path to your target workspace"
+    },
+    "Tmp_WorkingSpace": {
+        "workspace": ".columba_tmp_workspace"
+    },
+    "Comm": {
+        "agent": {
+            "smtp_host": "smtp.xxx.com",
+            "smtp_port": xxx,
+            "imap_host": "imap.xxx.com",
+            "imap_port": xxx,
+            "username": "xxx@xxx.com",
+            "password": "authorization_code"
+        },
+        "user_email": [
+        "xxx@xxx.com"
+        ]
+    },
+    "Log": {
+        "log_dir": ".log"
+    },
+    
+    
+    "Scheduler": {
+        "poll_interval_idle": 60,
+        "poll_interval_active": 5,
+        "active_timeout": 300,
+        "background_running": false,
+        "agent_persistence": false,
+        "agent_timeout": 600
+        
+    },
+    "Agent": {
+        "model_path": "Model/Qwen3-4B-Q8_0.gguf",
+        "n_threads": 4,
+        "max_iterations": 10,
+        "context_length": 4096,
+        "stream": true,
+        "system_prompt": "你是Columba，是一个服务器上运行的agent，能够通过电子邮件与用户交流，并执行各种任务来帮助用户完成目标。"
+    }
+}

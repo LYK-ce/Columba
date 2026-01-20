@@ -182,14 +182,14 @@ Agent处理完成后，会通过邮件返回：
     },
     "Comm": {
         "agent": {
-            "smtp_host": "smtp.163.com",
-            "smtp_port": 465,
-            "imap_host": "imap.163.com",
-            "imap_port": 993,
-            "username": "agent@163.com",
+            "smtp_host": "smtp.xxx.com",
+            "smtp_port": xxx,
+            "imap_host": "imap.xxx.com",
+            "imap_port": xxx,
+            "username": "xxx@xxx.com",
             "password": "authorization_code"
         },
-        "user_email": ["user@163.com"]
+        "user_email": ["xxx@xxx.com"]
     },
     "Log": {
         "log_dir": ".log"

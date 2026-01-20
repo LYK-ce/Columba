@@ -76,12 +76,12 @@ python Tool/download_model.py --url "https://www.modelscope.cn/models/xxx/file.g
 {
     "Comm": {
         "agent": {
-            "smtp_host": "smtp.163.com",
-            "smtp_port": 465,
-            "imap_host": "imap.163.com",
-            "imap_port": 993,
-            "username": "your_agent_email@163.com",
-            "password": "your_authorization_code"
+            "smtp_host": "smtp.xxx.com",
+            "smtp_port": xxx,
+            "imap_host": "imap.xxx.com",
+            "imap_port": xxx,
+            "username": "xxx@xxx.com",
+            "password": "authorization_code"
         },
         "user_email": ["your_user_email@example.com"]
     }

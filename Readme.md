@@ -36,15 +36,8 @@ Columba/
 
 ## 安装
 
-### 1. 克隆仓库
 
-```bash
-git clone https://github.com/your-repo/Columba.git
-cd Columba
-git submodule update --init --recursive  # 初始化llama.cpp子模块
-```
-
-### 2. 安装依赖
+### 1. 安装依赖
 
 ```bash
 pip install -r requirements.txt
@@ -53,7 +46,7 @@ pip install -r requirements.txt
 主要依赖：
 - `llama-cpp-python>=0.2.0` - LLM推理引擎
 
-### 3. 下载模型
+### 2. 下载模型
 
 创建Model目录并下载GGUF格式的模型：
 
@@ -62,7 +55,7 @@ mkdir Model
 python Tool/download_model.py
 ```
 
-默认下载Qwen3-8B-Q8_0模型，也可指定其他模型：
+默认下载Qwen3-0.6B-Q8_0模型，也可指定其他模型：
 
 ```bash
 python Tool/download_model.py --url "https://www.modelscope.cn/models/xxx/file.gguf"
@@ -75,7 +68,7 @@ python Tool/download_model.py --url "https://www.modelscope.cn/models/xxx/file.g
 | Qwen3-4B | 多步骤复杂任务 | ~5GB |
 | Qwen3-8B | 生产环境推荐 | ~10GB |
 
-### 4. 配置邮箱
+### 3. 配置邮箱
 
 编辑`Src/Config/config.json`：
 
@@ -98,7 +91,7 @@ python Tool/download_model.py --url "https://www.modelscope.cn/models/xxx/file.g
 - `agent`: Columba使用的邮箱账户配置
 - `user_email`: 授权的用户邮箱列表，只接收这些邮箱的指令
 
-### 5. 配置模型
+### 4. 配置模型
 
 ```json
 {
@@ -111,7 +104,7 @@ python Tool/download_model.py --url "https://www.modelscope.cn/models/xxx/file.g
 }
 ```
 
-### 6. 配置工作目录
+### 5. 配置工作目录
 
 ```json
 {

@@ -1,5 +1,5 @@
 #Presented by KeJi
-#Date : 2026-01-19
+#Date : 2026-01-20
 
 """
 Scheduler_Daemon 后台模组
@@ -9,6 +9,8 @@ Scheduler_Daemon 后台模组
 import time
 import signal
 import threading
+import shutil
+import atexit
 from multiprocessing import Process, Queue
 import queue
 import sys
@@ -44,6 +46,10 @@ class Scheduler:
         self.agent_persistence = scheduler_config.get("agent_persistence", False)
         self.agent_timeout = scheduler_config.get("agent_timeout", 120)
         
+        # 临时工作目录配置
+        tmp_config = config.get("Tmp_WorkingSpace", {})
+        self._tmp_workspace = tmp_config.get("workspace", ".columba_tmp_workspace")
+        
         # 运行时属性
         self.state = self.STATE_IDLE
         self.to_agent_queue = Queue()
@@ -59,7 +65,50 @@ class Scheduler:
         # Comm实例
         self._comm = Comm(config)
         
+        # 初始化临时工作目录
+        self._init_tmp_workspace()
+        
+        # 注册atexit清理函数作为兜底
+        atexit.register(self._cleanup_tmp_workspace)
+        
         Log_Info("Scheduler", f"初始化完成: idle间隔={self.poll_interval_idle}s, active间隔={self.poll_interval_active}s")
+    
+    def _init_tmp_workspace(self):
+        """
+        初始化临时工作目录
+        启动时清理残留目录，然后创建新目录
+        """
+        # 构建完整路径
+        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        self._tmp_workspace_path = os.path.join(base_dir, self._tmp_workspace)
+        
+        # 清理可能存在的残留目录
+        if os.path.exists(self._tmp_workspace_path):
+            Log_Info("Scheduler", f"清理残留临时目录: {self._tmp_workspace_path}")
+            try:
+                shutil.rmtree(self._tmp_workspace_path)
+            except Exception as e:
+                Log_Info("Scheduler", f"清理残留目录失败: {e}")
+        
+        # 创建新目录
+        try:
+            os.makedirs(self._tmp_workspace_path, exist_ok=True)
+            Log_Info("Scheduler", f"临时工作目录已创建: {self._tmp_workspace_path}")
+        except Exception as e:
+            Log_Info("Scheduler", f"创建临时目录失败: {e}")
+            raise
+    
+    def _cleanup_tmp_workspace(self):
+        """
+        清理临时工作目录
+        """
+        if hasattr(self, '_tmp_workspace_path') and self._tmp_workspace_path:
+            if os.path.exists(self._tmp_workspace_path):
+                try:
+                    shutil.rmtree(self._tmp_workspace_path)
+                    Log_Info("Scheduler", f"临时工作目录已清理: {self._tmp_workspace_path}")
+                except Exception as e:
+                    Log_Info("Scheduler", f"清理临时目录失败: {e}")
     
     def _setup_signal_handlers(self):
         """设置信号处理器（仅在主线程中有效）"""
@@ -169,6 +218,44 @@ class Scheduler:
         
         return email_timeout and agent_timeout
     
+    def _build_email_content(self, agent_content: str, output_files: list) -> str:
+        """
+        构建邮件内容，包含Agent响应和命令输出文件内容
+        
+        Args:
+            agent_content: Agent响应内容
+            output_files: 命令输出文件路径列表
+        
+        Returns:
+            完整邮件内容
+        """
+        parts = [agent_content]
+        
+        if output_files:
+            parts.append("\n" + "=" * 50)
+            parts.append("命令执行输出详情：")
+            parts.append("=" * 50)
+            
+            # Windows使用gbk编码，Unix使用utf-8
+            file_encoding = 'gbk' if os.name == 'nt' else 'utf-8'
+            
+            for i, file_path in enumerate(output_files, 1):
+                try:
+                    if os.path.exists(file_path):
+                        with open(file_path, 'r', encoding=file_encoding, errors='replace') as f:
+                            content = f.read()
+                        
+                        filename = os.path.basename(file_path)
+                        parts.append(f"\n--- [{i}] {filename} ---")
+                        parts.append(content if content.strip() else "[无输出]")
+                    else:
+                        Log_Info("Scheduler", f"输出文件不存在: {file_path}")
+                except Exception as e:
+                    Log_Info("Scheduler", f"读取输出文件失败: {file_path}, {e}")
+                    parts.append(f"\n--- [{i}] 读取失败: {e} ---")
+        
+        return "\n".join(parts)
+    
     def start(self):
         """
         开始运行Scheduler主循环
@@ -211,11 +298,13 @@ class Scheduler:
                 self.state = self.STATE_ACTIVE
                 self.last_agent_response_time = time.time()
                 
-                # 将Agent响应通过邮件发送给用户
+                # 将Agent响应通过邮件发送给用户（包含命令输出文件内容）
                 if response.get("type") == "response":
                     reply_content = response.get("content", "")
-                    self._comm.Send(reply_content)
-                    Log_Info("Scheduler", "已将响应通过邮件发送给用户")
+                    output_files = response.get("output_files", [])
+                    email_content = self._build_email_content(reply_content, output_files)
+                    self._comm.Send(email_content)
+                    Log_Info("Scheduler", f"已将响应通过邮件发送给用户，包含{len(output_files)}个输出文件")
             else:
                 Log_Info("Scheduler", "Agent响应超时，返回Idle状态")
                 self._comm.Send("抱歉，处理您的请求时超时，请稍后重试。")
@@ -243,22 +332,26 @@ class Scheduler:
             if response:
                 self.last_agent_response_time = time.time()
                 
-                # 将Agent响应通过邮件发送给用户
+                # 将Agent响应通过邮件发送给用户（包含命令输出文件内容）
                 if response.get("type") == "response":
                     reply_content = response.get("content", "")
-                    self._comm.Send(reply_content)
-                    Log_Info("Scheduler", "已将响应通过邮件发送给用户")
+                    output_files = response.get("output_files", [])
+                    email_content = self._build_email_content(reply_content, output_files)
+                    self._comm.Send(email_content)
+                    Log_Info("Scheduler", f"已将响应通过邮件发送给用户，包含{len(output_files)}个输出文件")
         
         # 检查是否有Agent主动发来的消息
         while True:
             response = self._try_get_agent_response()
             if response:
                 self.last_agent_response_time = time.time()
-                # 将Agent响应通过邮件发送给用户
+                # 将Agent响应通过邮件发送给用户（包含命令输出文件内容）
                 if response.get("type") == "response":
                     reply_content = response.get("content", "")
-                    self._comm.Send(reply_content)
-                    Log_Info("Scheduler", "已将Agent主动响应通过邮件发送给用户")
+                    output_files = response.get("output_files", [])
+                    email_content = self._build_email_content(reply_content, output_files)
+                    self._comm.Send(email_content)
+                    Log_Info("Scheduler", f"已将Agent主动响应通过邮件发送给用户，包含{len(output_files)}个输出文件")
             else:
                 break
         
@@ -277,6 +370,9 @@ class Scheduler:
         
         if self.agent and self.agent.is_alive():
             self._stop_agent()
+        
+        # 清理临时工作目录
+        self._cleanup_tmp_workspace()
         
         Log_Info("Scheduler", "Scheduler已退出")
 

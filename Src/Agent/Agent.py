@@ -1,5 +1,5 @@
 #Presented by KeJi
-#Date : 2026-01-19
+#Date : 2026-01-20
 
 """
 Agent - Columba Agent核心类，负责处理用户消息和工具调用
@@ -14,21 +14,25 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from llama_cpp import Llama
 from Log.Log import Log_Info
+from API.Shell import Persistent_Shell
 
 
 class Agent:
     """
     Agent类 - 处理用户消息，支持工具调用
+    持有持久化Shell实例，随Agent启动/关闭
     """
     
     MODULE_NAME = "Agent"
     
-    def __init__(self, config: dict):
+    def __init__(self, config: dict, workspace: str = None, target_workspace: str = None):
         """
         初始化Agent
         
         Args:
             config: 配置字典，包含Agent配置
+            workspace: 临时工作目录路径（存储临时文件）
+            target_workspace: 目标工作目录路径（API操作的目标目录）
         """
         agent_config = config.get("Agent", {})
         
@@ -36,7 +40,12 @@ class Agent:
         self.n_threads = agent_config.get("n_threads", 4)
         self.max_iterations = agent_config.get("max_iterations", 10)
         self.context_length = agent_config.get("context_length", 2048)
+        self.stream = agent_config.get("stream", True)
         self.system_prompt = agent_config.get("system_prompt", "You are a helpful AI assistant.")
+        
+        # 工作目录
+        self.workspace = workspace  # 临时目录
+        self.target_workspace = target_workspace  # 目标操作目录
         
         # 构建完整模型路径
         if not os.path.isabs(self.model_path):
@@ -46,8 +55,20 @@ class Agent:
         # 注册的工具
         self.tools = {}
         
+        # 初始化持久化Shell，进入target_workspace目录，输出保存到tmp_workspace
+        Log_Info(self.MODULE_NAME, f"Initializing persistent shell in {self.target_workspace}")
+        Log_Info(self.MODULE_NAME, f"Command output will be saved to {self.workspace}")
+        self.shell = Persistent_Shell(
+            working_dir=self.target_workspace,
+            tmp_workspace=self.workspace
+        )
+        self.shell.Start()
+        Log_Info(self.MODULE_NAME, "Persistent shell started")
+        
         # 加载模型
         Log_Info(self.MODULE_NAME, f"Loading model from {self.model_path}")
+        Log_Info(self.MODULE_NAME, f"Tmp workspace: {self.workspace}")
+        Log_Info(self.MODULE_NAME, f"Target workspace: {self.target_workspace}")
         self.model = Llama(
             model_path=self.model_path,
             n_ctx=self.context_length,
@@ -72,7 +93,7 @@ class Agent:
         }
         Log_Info(self.MODULE_NAME, f"Registered tool: {name}")
     
-    def Run(self, user_message: str, stream: bool = False) -> str:
+    def Run(self, user_message: str) -> str:
         """
         处理用户消息，返回结果
         
@@ -100,10 +121,10 @@ class Agent:
         for iteration in range(self.max_iterations):
             Log_Info(self.MODULE_NAME, f"Iteration {iteration + 1}")
             
-            if stream:
+            if self.stream :
                 print(f"\n[Iteration {iteration + 1}] ", end="", flush=True)
             
-            response_text = self._Generate_Response(messages, stream)
+            response_text = self._Generate_Response(messages, self.stream)
             Log_Info(self.MODULE_NAME, f"Model response: {response_text[:100]}...")
             
             # 解析工具调用
@@ -113,27 +134,28 @@ class Agent:
                 # 无工具调用，清理并返回最终结果
                 final_result = self._Clean_Response(response_text)
                 
-                # 如果清理后内容为空，说明模型只输出了think但没有答案，继续请求
+                # 如果清理后内容为空，说明模型只输出了think但没有答案
                 if not final_result.strip() and iteration < self.max_iterations - 1:
                     Log_Info(self.MODULE_NAME, "Empty response after cleaning, requesting continuation")
-                    if stream:
+                    if self.stream:
                         print("\n[Requesting continuation...]")
                     messages.append({"role": "assistant", "content": response_text})
-                    messages.append({"role": "user", "content": "Please provide your final answer directly without using <think> tags."})
+                    # 提示模型继续执行或提供答案
+                    messages.append({"role": "user", "content": "Continue with the next step if there are remaining tasks, or provide your final answer. Output only the tool JSON or your response text."})
                     continue
                 
                 return final_result if final_result.strip() else response_text
             
             tool_name, tool_args = tool_call
             
-            if stream:
+            if self.stream:
                 print(f"\n\n[Tool Call] {tool_name} with args: {tool_args}")
             
             # 执行工具
             tool_result = self._Execute_Tool(tool_name, tool_args)
             Log_Info(self.MODULE_NAME, f"Tool {tool_name} result: {tool_result}")
             
-            if stream:
+            if self.stream:
                 print(f"\n[Tool Result]\n{tool_result}")
             
             # 将工具结果添加到消息历史
@@ -207,31 +229,48 @@ class Agent:
         """
         prompt = f"""{self.system_prompt}
 
-You have access to the following tools:
+你可以使用以下工具：
 {tool_descriptions}
 
-## CRITICAL RULES
-1. You can ONLY call ONE tool per response. Never output multiple JSON objects.
-2. If a task requires multiple commands, call the first one, wait for the result, then call the next.
-3. To use a tool, respond ONLY with a single JSON object:
-{{"tool": "tool_name", "args": {{"command": "your_command"}}}}
+## 响应格式
+调用工具时，只输出JSON（不要有其他文字）：
+{{"tool": "工具名", "args": {{"command": "命令"}}}}
 
-4. Do NOT add any text before or after the JSON when calling a tool.
-5. After receiving tool results, summarize the information clearly for the user.
+完成所有任务后，直接用中文回复用户（不要JSON）。
 
-## Examples
-User: "Check GPU status"
+## 核心规则
+1. 每次响应只调用一个工具
+2. 如果需要调用多个工具，在收到上一次工具结果后，再进行下一步工作
+3. 如果还有步骤未完成，立即输出下一个工具调用的JSON
+4. 只有当所有步骤都完成后，才输出最终的文字总结
+5. 步骤之间不要解释或总结，直接调用下一个工具
+6. 不要输出思考过程，直接输出JSON或最终答案
+
+## 多步骤任务示例
+用户："进入Tool目录并列出内容"
+
+第1次响应（你输出）：
+{{"tool": "Execute_Command", "args": {{"command": "cd Tool"}}}}
+
+[系统返回工具结果]
+
+第2次响应（还需要执行dir，你输出）：
+{{"tool": "Execute_Command", "args": {{"command": "dir"}}}}
+
+[系统返回工具结果]
+
+第3次响应（所有步骤完成，输出总结）：
+已进入Tool目录并列出内容。目录中包含：[文件列表摘要]
+
+## 单步骤示例
+用户："查看GPU状态"
 {{"tool": "Execute_Command", "args": {{"command": "nvidia-smi"}}}}
 
-User: "Create a folder called test and list files"
-Step 1 (first response): {{"tool": "Execute_Command", "args": {{"command": "mkdir test"}}}}
-(Wait for result, then in next response)
-Step 2: {{"tool": "Execute_Command", "args": {{"command": "dir"}}}}
+## 无需工具示例
+用户："2+2等于多少？"
+2+2等于4。
 
-User: "What is 2+2?"
-This doesn't need a tool. Answer: 2+2 equals 4.
-
-IMPORTANT: ONE tool call per response only!
+重要：每次只输出一个JSON！收到结果后如果还有步骤，立即输出下一个JSON！
 """
         return prompt
     
@@ -338,3 +377,17 @@ IMPORTANT: ONE tool call per response only!
         except Exception as e:
             Log_Info(self.MODULE_NAME, f"Tool execution error: {e}")
             return f"Error executing tool: {e}"
+    
+    def Shutdown(self):
+        """
+        关闭Agent，释放资源（包括持久化Shell）
+        """
+        Log_Info(self.MODULE_NAME, "Shutting down Agent")
+        
+        # 关闭持久化Shell
+        if self.shell is not None:
+            self.shell.Stop()
+            self.shell = None
+            Log_Info(self.MODULE_NAME, "Persistent shell stopped")
+        
+        Log_Info(self.MODULE_NAME, "Agent shutdown complete")

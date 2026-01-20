@@ -57,18 +57,21 @@ Agent类
 
 ##### 属性
    - model_path 模型路径，agent从这个路径中加载对应的模型
-   - n_threads 使用多少个线程 
+   - n_threads 使用多少个线程
    - max_iteration   tool调用最大轮数
    - conext_length   上下文长度限制
-   - system_prompt   系统提示词  
+   - system_prompt   系统提示词
+   - workspace       临时工作目录（存储命令输出文件等临时文件）
+   - target_workspace 目标工作目录（Shell初始进入的目录，API操作的目标目录）
+   - shell           Persistent_Shell实例，持久化Shell进程
    
    - model     llama.cpp具体模型实例
    - tools     注册的工具
    
 
 ##### 方法
-1. __init__(self, config):
-   """加载模型，配置tools"""
+1. __init__(self, config, workspace=None, target_workspace=None):
+   """加载模型，配置tools，初始化持久化Shell"""
     
 2. register_tool(self, name, func, description):
    """注册工具"""
@@ -83,6 +86,9 @@ Agent类
 5. _execute_tool(self, tool_name, args) -> str:
    """执行指定tool"""
 
+6. shutdown(self):
+   """关闭Agent，释放资源（包括持久化Shell）"""
+
 
 
 ### API 方法调用模组
@@ -90,15 +96,75 @@ API模组为当前的Agent提供了我们所需要的功能。
 
 #### 文件
 Src/API
-   - Shell.py 命令行抽象，所有工具调用将会通过这里变成各种命令执行。后续还需要添加命令检测确保安全等等。
+   - Shell.py 命令行抽象，包含持久化Shell和普通Shell两种实现
    - Exec.py  命令执行工具
-#### Shell 
-   命令行抽象，封装subprocess类，所有工具调用通过这里变成各种具体的命令，后续添加安全检测
+
+#### Persistent_Shell 持久化Shell类
+持久化Shell进程，随Agent启动/关闭，支持状态保持（如cd命令后工作目录持续生效）。
+
+##### 属性
+| 属性 | 类型 | 说明 |
+|------|------|------|
+| initial_working_dir | str | 初始工作目录（target_workspace） |
+| tmp_workspace | str | 临时工作目录，用于存储命令输出文件 |
+| timeout | int | 默认命令超时时间（秒） |
+| process | Popen | subprocess进程实例 |
+| _encoding | str | 系统编码（Windows=gbk，Unix=utf-8） |
+
+##### 方法
+1. __init__(self, working_dir=None, tmp_workspace=None, timeout=30)
+   初始化Shell配置
+
+2. Start(self)
+   启动持久化shell进程（cmd.exe或bash），进入initial_working_dir
+
+3. Stop(self)
+   停止持久化shell进程，发送exit命令后terminate/kill
+
+4. Execute(self, command, timeout=None) -> (stdout, stderr, return_code, output_file_path)
+   执行命令，输出重定向到tmp_workspace下的文件，返回4元组
+
+5. Get_Working_Dir(self) -> str
+   获取当前工作目录
+
+6. Get_Last_Output_File(self) -> str
+   获取最近一次命令的输出文件路径
+
+7. Is_Running(self) -> bool
+   检查shell是否正在运行
+
+#### Shell 普通Shell类（兼容保留）
+非持久化版本，每次Execute创建新的subprocess.run进程。
+
 #### Exec 命令执行工具
-   工具API封装，包含执行agent转换成的对应命令。
-   Execute_Command(command) 供Agent调用
-   API_DESCRIPTION 工具描述
-   调用Shell.Execute()获取结果
+工具API封装，供Agent调用执行命令。
+
+##### 全局变量
+- _SHELL: 指向Agent的Persistent_Shell实例
+- _OUTPUT_FILES: 命令输出文件路径列表
+
+##### 方法
+1. Set_Shell(shell)
+   设置Shell引用（由Agent_Process初始化时调用）
+
+2. Get_Shell() -> Persistent_Shell
+   获取Shell引用
+
+3. Get_Output_Files() -> list
+   获取所有命令输出文件路径
+
+4. Clear_Output_Files()
+   清空输出文件列表（在发送邮件后调用）
+
+5. Execute_Command(command) -> str
+   执行命令，返回格式化的结果字符串（包含退出码、工作目录、输出文件路径、stdout/stderr）
+
+#### API_DESCRIPTION
+```
+Execute a shell command in the persistent shell.
+The shell maintains state across commands (e.g., cd changes persist).
+Command output is saved to a file and also returned.
+```
 
 ### Scheduler_Daemon 后台模组
 Scheduler_Daemon模组，是整个Columba项目的后台进程。它运行在后台，负责检查邮箱内容，以及唤醒agent呼叫它处理任务等。scheduler daemon根据用户配置，每隔一定时间检查一次邮箱，如果没有邮件那么就什么都不做，如果有邮件，就唤醒agent，等待agent加载完毕后将用户的指令发送给agent开始处理，同时将轮询次数调整为5 s。根据用户配置，如果一定时间内没有再次收到用户的邮件，那么就恢复到原来的检查次数，然后关闭当前的agent。
@@ -127,6 +193,8 @@ Class Scheduler
 | stop_event | Event | 用于优雅停止的事件对象 |
 | _agent_target | function | Agent进程的目标函数 |
 | _comm | Comm | 通信模组实例 |
+| _tmp_workspace | str | 临时工作目录相对路径 |
+| _tmp_workspace_path | str | 临时工作目录完整路径 |
 
 ##### 方法
 1. __init__(self, config, agent_target=None)
@@ -169,6 +237,15 @@ Class Scheduler
 12. _run_active_state(self)
     Active状态处理逻辑
 
+13. _init_tmp_workspace(self)
+    初始化临时工作目录，清理残留后创建新目录
+
+14. _cleanup_tmp_workspace(self)
+    清理临时工作目录（注册到atexit作为兜底）
+
+15. _build_email_content(self, agent_content, output_files) -> str
+    构建邮件内容，包含Agent响应和命令输出文件内容
+
 #### 消息协议
 
 ##### Scheduler → Agent
@@ -180,8 +257,10 @@ Class Scheduler
 ##### Agent → Scheduler
 ```python
 {"type": "ready", "timestamp": 1737277512.0}
-{"type": "response", "content": "处理结果", "timestamp": 1737277517.0}
+{"type": "response", "content": "处理结果", "output_files": ["/path/to/cmd_output_xxx.txt"], "timestamp": 1737277517.0}
 ```
+
+**output_files说明**：包含本次Agent执行过程中所有命令输出文件的路径列表，Scheduler会读取这些文件内容附加到邮件中。
 
 #### 状态机流程
 ```
@@ -300,8 +379,62 @@ Class Comm
 #### 文件
 Src/Log
     - Log.py
-
 ##### 方法
 1. Log_Info(模组, 文本)
    按照 [时间] [信息] [模组] : 文本 的形式将日志存储到.log/日期.log当中
+
+### 工作目录配置
+
+#### Tmp_WorkingSpace 临时工作目录
+用于存储Agent运行过程中产生的临时文件，如命令输出文件等。
+
+```json
+{
+    "Tmp_WorkingSpace": {
+        "workspace": ".columba_tmp_workspace"
+    }
+}
+```
+
+- Scheduler启动时创建该目录（清理残留后新建）
+- Scheduler退出时清理该目录
+- 命令输出文件保存在此目录下
+
+#### Target_Workspace 目标工作目录
+Agent的Shell初始进入的工作目录，API操作的默认目标目录。
+
+```json
+{
+    "Target_Workspace": {
+        "target_workspace": "C:/workspace"
+    }
+}
+```
+
+## 模型能力发现
+
+### 多命令串行执行能力测试
+
+通过测试发现，不同规模的模型在多步骤任务（需要串行执行多个命令）的能力上存在显著差异：
+
+| 模型 | 单命令执行 | 两命令串行 | 两命令以上 |
+|------|-----------|-----------|-----------|
+| Qwen3-0.6B | ✅ 支持 | ❌ 不稳定 | ❌ 不支持 |
+| Qwen3-4B | ✅ 支持 | ✅ 支持 | ⚠️ 待测试 |
+
+#### 问题表现
+- **0.6B模型**：在需要执行两个或以上命令的任务中，可能会：
+  - 在一个响应中输出多个JSON工具调用（违反规则）
+  - 只执行第一个命令后就输出最终答案
+  - 输出大量思考过程而不是工具调用JSON
+
+- **4B模型**：能够正确地：
+  - 每次响应只输出一个JSON工具调用
+  - 在收到工具结果后判断是否需要继续执行下一步
+  - 完成所有步骤后再输出最终总结
+
+#### 建议
+- **生产环境**：建议使用4B或更大参数量的模型
+- **资源受限**：0.6B模型仅适用于单步骤简单任务
+   
    

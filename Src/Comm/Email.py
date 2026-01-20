@@ -61,7 +61,7 @@ class Comm:
         """
         发送IMAP ID命令，163邮箱需要此信息才能正常使用
         """
-        imap_id = '("name" "Columba" "version" "1.0.0" "vendor" "KeJi")'
+        imap_id = '("name" "Columba" "version" "1.0.0" "vendor" "Columba Project")'
         tag = imap._new_tag()
         imap.send(f'{tag.decode()} ID {imap_id}\r\n'.encode())
         imap.readline()
@@ -115,7 +115,7 @@ class Comm:
             Log_Info("Comm", f"接收邮件内容: {result}")
             return result
         
-
+        Log_Info("Comm", f"未接收到邮件")
         return None
     
     def _Extract_Body(self, msg):

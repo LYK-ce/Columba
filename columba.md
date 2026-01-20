@@ -185,6 +185,203 @@ Agent 生成的任务将存入 Scheduler_Daemon 管理的队列中：
 2. **保证执行顺序**：按序列顺序逐个执行
 3. **统一结果汇总**：所有结果一起返回给LLM生成最终回复
 
+### Function Calling 实现方案
+
+#### 当前方案：提示词工程
+
+当前 Agent 通过**提示词工程**实现工具调用：
+1. 在系统提示词中定义工具描述和JSON格式要求
+2. LLM生成符合格式的输出：`{"tool": "name", "args": {...}}`
+3. Agent解析输出，匹配到工具则执行
+
+**优点**：通用、无需特殊模型
+**缺点**：依赖模型遵循指令能力，格式可能不稳定
+
+#### 进阶方案：微调原生 Function Calling 模型
+
+通过微调使模型原生支持特殊token格式的工具调用。
+
+##### 核心概念
+
+原生Function Calling需要模型学会输出**特殊格式的token序列**：
+
+```
+<|function_call|>
+{"name": "Execute_Command", "arguments": {"command": "ls -la"}}
+<|end_function_call|>
+```
+
+##### 步骤一：准备训练数据
+
+**数据格式（ChatML风格）**
+```json
+{
+  "conversations": [
+    {
+      "role": "system",
+      "content": "You are an assistant with access to tools:\n\n[{\"name\": \"Execute_Command\", \"description\": \"执行命令\", \"parameters\": {\"command\": \"string\"}}]"
+    },
+    {
+      "role": "user",
+      "content": "查看当前目录"
+    },
+    {
+      "role": "assistant",
+      "content": "<|function_call|>{\"name\": \"Execute_Command\", \"arguments\": {\"command\": \"pwd\"}}<|end_function_call|>"
+    },
+    {
+      "role": "function_result",
+      "content": "/home/user"
+    },
+    {
+      "role": "assistant",
+      "content": "当前目录是 /home/user"
+    }
+  ]
+}
+```
+
+**数据规模建议**
+| 场景覆盖 | 数据量 |
+|----------|--------|
+| 单工具调用 | 500条 |
+| 多工具选择 | 1500条 |
+| 多轮工具调用 | 1000条 |
+| 拒绝调用（无需工具时） | 500条 |
+| **总计** | **3000-5000条** |
+
+##### 步骤二：扩展词表（可选但推荐）
+
+```python
+from transformers import AutoTokenizer
+
+tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-0.5B")
+
+# 添加特殊token
+special_tokens = {
+    "additional_special_tokens": [
+        "<|function_call|>",
+        "<|end_function_call|>",
+        "<|function_result|>",
+        "<|end_function_result|>"
+    ]
+}
+tokenizer.add_special_tokens(special_tokens)
+tokenizer.save_pretrained("./tokenizer_with_fc")
+```
+
+##### 步骤三：LoRA 微调
+
+**环境准备**
+```bash
+pip install transformers peft datasets accelerate bitsandbytes
+```
+
+**训练脚本**
+```python
+from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments
+from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+from datasets import load_dataset
+
+# 加载模型
+model = AutoModelForCausalLM.from_pretrained(
+    "Qwen/Qwen2-0.5B",
+    load_in_4bit=True,  # QLoRA
+    device_map="auto"
+)
+model = prepare_model_for_kbit_training(model)
+
+# LoRA配置
+lora_config = LoraConfig(
+    r=16,                    # 秩
+    lora_alpha=32,
+    target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+    lora_dropout=0.05,
+    task_type="CAUSAL_LM"
+)
+model = get_peft_model(model, lora_config)
+
+# 训练参数
+training_args = TrainingArguments(
+    output_dir="./qwen-fc-lora",
+    num_train_epochs=3,
+    per_device_train_batch_size=4,
+    gradient_accumulation_steps=4,
+    learning_rate=2e-4,
+    save_steps=500,
+    logging_steps=100
+)
+
+# 开始训练
+trainer = Trainer(
+    model=model,
+    args=training_args,
+    train_dataset=dataset
+)
+trainer.train()
+
+# 保存
+model.save_pretrained("./qwen-fc-lora")
+```
+
+##### 步骤四：合并并导出GGUF
+
+```python
+# 合并LoRA到基础模型
+from peft import PeftModel
+
+base_model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2-0.5B")
+model = PeftModel.from_pretrained(base_model, "./qwen-fc-lora")
+merged = model.merge_and_unload()
+merged.save_pretrained("./qwen-fc-merged")
+
+# 转换为GGUF（用llama.cpp）
+# python convert.py ./qwen-fc-merged --outtype q8_0 --outfile qwen-fc.gguf
+```
+
+##### 步骤五：修改Agent代码
+
+```python
+# 解析原生Function Call格式
+def _Parse_Tool_Call(self, response: str):
+    match = re.search(
+        r'<\|function_call\|>(.*?)<\|end_function_call\|>',
+        response,
+        re.DOTALL
+    )
+    if match:
+        parsed = json.loads(match.group(1))
+        return (parsed["name"], parsed.get("arguments", {}))
+    return None
+```
+
+##### 时间/成本估算
+
+| 阶段 | 时间 | 成本 |
+|------|------|------|
+| 数据准备 | 2-5天 | 人工 or GPT-4 API $20-50 |
+| 训练 | 2-4小时 | 本地免费 / 云$5-20 |
+| 测试调优 | 1-2天 | - |
+| **总计** | **约1周** | **$30-100** |
+
+##### 硬件需求（基于0.6B模型）
+
+| 方法 | GPU需求 | 训练显存 |
+|------|---------|----------|
+| **全参数微调** | 8GB+ | ~6GB |
+| **LoRA微调** | 4GB+ | ~3GB |
+| **QLoRA** | 4GB | ~2GB |
+
+##### 替代方案
+
+| 方案 | 成本 | 效果 |
+|------|------|------|
+| **使用已微调的模型** | 免费 | ★★★★ |
+| └ Qwen2.5-Coder | 原生支持Function Calling | |
+| └ Hermes-2系列 | 专门训练过工具调用 | |
+| **优化提示词** | 免费 | ★★★ |
+| **微调** | $50-500 | ★★★★★ |
+
 ## API 模块设计探索
 
 ### 模块用途

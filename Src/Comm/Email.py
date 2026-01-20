@@ -115,7 +115,7 @@ class Comm:
             Log_Info("Comm", f"接收邮件内容: {result}")
             return result
         
-        Log_Info("Comm", f"未接收到邮件")
+        # Log_Info("Comm", f"未接收到邮件")
         return None
     
     def _Extract_Body(self, msg):

@@ -192,7 +192,8 @@ Agent处理完成后，会通过邮件返回：
         "user_email": ["xxx@xxx.com"]
     },
     "Log": {
-        "log_dir": ".log"
+        "log_dir": ".log",
+        "clean_up_interval_days": 7
     },
     "Scheduler": {
         "poll_interval_idle": 60,
@@ -222,6 +223,7 @@ Agent处理完成后，会通过邮件返回：
 | `n_threads` | LLM推理线程数 | 4 |
 | `max_iterations` | 最大工具调用轮数 | 10 |
 | `context_length` | 上下文长度限制 | 4096 |
+| `clean_up_interval_days` | 日志保留天数，超过此天数的日志自动清理 | 7 |
 
 ## 注意事项
 

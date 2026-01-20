@@ -17,7 +17,7 @@ import sys
 import os
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-from Log.Log import Log_Info
+from Log.Log import Log_Info, Cleanup_Old_Logs
 from Comm.Email import Comm
 
 
@@ -58,6 +58,7 @@ class Scheduler:
         self.last_email_time = 0
         self.last_agent_response_time = 0
         self.stop_event = threading.Event()
+        self._last_log_cleanup_time = 0  # 上次日志清理时间
         
         # Agent目标函数
         self._agent_target = agent_target
@@ -70,6 +71,12 @@ class Scheduler:
         
         # 注册atexit清理函数作为兜底
         atexit.register(self._cleanup_tmp_workspace)
+        
+        # 清理过期日志
+        log_config = config.get("Log", {})
+        cleanup_days = log_config.get("clean_up_interval_days", 0)
+        if cleanup_days > 0:
+            Cleanup_Old_Logs(cleanup_days)
         
         Log_Info("Scheduler", f"初始化完成: idle间隔={self.poll_interval_idle}s, active间隔={self.poll_interval_active}s")
     
@@ -218,6 +225,18 @@ class Scheduler:
         
         return email_timeout and agent_timeout
     
+    def _check_and_cleanup_logs(self):
+        """检查并执行日志清理，每24小时执行一次"""
+        current_time = time.time()
+        ONE_DAY = 86400  # 24小时的秒数
+        
+        if current_time - self._last_log_cleanup_time >= ONE_DAY:
+            log_config = self._config.get("Log", {})
+            cleanup_days = log_config.get("clean_up_interval_days", 0)
+            if cleanup_days > 0:
+                Cleanup_Old_Logs(cleanup_days)
+            self._last_log_cleanup_time = current_time
+    
     def _build_email_content(self, agent_content: str, output_files: list) -> str:
         """
         构建邮件内容，包含Agent响应和命令输出文件内容
@@ -264,6 +283,9 @@ class Scheduler:
         Log_Info("Scheduler", "Scheduler开始运行")
         
         while not self.stop_event.is_set():
+            # 检查日志清理（每24小时执行一次）
+            self._check_and_cleanup_logs()
+            
             if self.state == self.STATE_IDLE:
                 self._run_idle_state()
             else:

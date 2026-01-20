@@ -379,9 +379,31 @@ Class Comm
 #### 文件
 Src/Log
     - Log.py
-##### 方法
+
+#### 方法
 1. Log_Info(模组, 文本)
    按照 [时间] [信息] [模组] : 文本 的形式将日志存储到.log/日期.log当中
+
+2. Get_Log_Dir() -> str
+   获取日志目录的完整路径
+
+3. Cleanup_Old_Logs(days)
+   清理超过指定天数的日志文件，由Scheduler定期调用
+
+#### 日志清理机制
+- Scheduler启动时立即执行一次清理
+- Scheduler主循环中每24小时自动执行一次清理
+- 根据`Log.clean_up_interval_days`配置决定保留天数
+
+#### 配置格式
+```json
+{
+    "Log": {
+        "log_dir": ".log",
+        "clean_up_interval_days": 7
+    }
+}
+```
 
 ### 工作目录配置
 
